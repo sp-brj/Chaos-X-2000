@@ -112,25 +112,21 @@ class SheetRow:
 def _rows_for_items(items: Iterable[Item]) -> dict[str, list[SheetRow]]:
     """
     Group items by sheet tab.
-    Columns (v1):
-      id | status | created_at | kind | horizon_tag | title | text | summary | telegram_user_id | source_message_id
+    Columns (v1, user-facing):
+      status | title | text
     """
     grouped: dict[str, list[SheetRow]] = {}
     for it in items:
         tab = _tab_for_item(it)
+        title = (it.title or "").strip()
+        if not title:
+            title = ((it.text or "").strip()[:80]) if it.text else ""
         grouped.setdefault(tab, []).append(
             SheetRow(
                 values=[
-                    str(it.id),
                     it.status,
-                    it.created_at.isoformat() if it.created_at else "",
-                    it.kind,
-                    it.horizon_tag or "",
-                    it.title or "",
+                    title,
                     (it.text or "").strip(),
-                    it.summary or "",
-                    it.telegram_user_id,
-                    it.source_message_id or "",
                 ]
             )
         )
@@ -152,18 +148,7 @@ def sync_items_to_google_sheet(*, items: list[Item]) -> dict[str, Any]:
     # Ensure tabs exist even if spreadsheet is fresh / has different default names.
     _ensure_tabs_exist(svc=svc, spreadsheet_id=sheet_id, tabs=REQUIRED_TABS)
 
-    headers = [
-        "id",
-        "status",
-        "created_at",
-        "kind",
-        "horizon_tag",
-        "title",
-        "text",
-        "summary",
-        "telegram_user_id",
-        "source_message_id",
-    ]
+    headers = ["status", "title", "text"]
 
     updates = 0
     for tab, rows in grouped.items():
