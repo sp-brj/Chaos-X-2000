@@ -38,6 +38,10 @@ def _startup() -> None:
 def health() -> Dict[str, Any]:
     return {"ok": True}
 
+@app.get("/")
+def root() -> Dict[str, Any]:
+    return {"ok": True, "service": "Chaos-X-2000"}
+
 
 def _require_shortcuts_token(x_shortcuts_token: str | None) -> None:
     expected = os.environ.get("SHORTCUTS_TOKEN")
