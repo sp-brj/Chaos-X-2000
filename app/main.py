@@ -340,4 +340,10 @@ def admin_google_sheets_sync(x_admin_token: str | None = Header(default=None)) -
     with session_scope(SessionLocal) as session:
         q = select(Item).order_by(desc(Item.created_at)).limit(5000)
         items = list(session.execute(q).scalars())
-    return sync_items_to_google_sheet(items=items)
+    try:
+        return sync_items_to_google_sheet(items=items)
+    except Exception as e:
+        # Don't leak secrets; return a short, actionable error.
+        msg = str(e) or e.__class__.__name__
+        msg = msg.replace("\n", " ").strip()
+        raise HTTPException(status_code=500, detail=f"Google Sheets sync failed: {e.__class__.__name__}: {msg[:300]}")
