@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import uuid
 from datetime import datetime
@@ -60,11 +61,16 @@ def _require_db() -> Any:
 
 
 def _require_admin_token(x_admin_token: str | None) -> None:
-    expected = os.environ.get("ADMIN_TOKEN")
+    expected = (os.environ.get("ADMIN_TOKEN") or "").strip()
     if not expected:
         raise HTTPException(status_code=500, detail="ADMIN_TOKEN not configured")
-    if x_admin_token != expected:
-        raise HTTPException(status_code=401, detail="Bad admin token")
+    got = (x_admin_token or "").strip()
+    if got != expected:
+        # Safe diagnostics to avoid leaking secrets, but helps detect "wrong service/old deploy/empty var".
+        raise HTTPException(
+            status_code=401,
+            detail=f"Bad admin token (got_len={len(got)} expected_len={len(expected)})",
+        )
 
 
 def _horizon_from_text(text: str) -> str | None:
