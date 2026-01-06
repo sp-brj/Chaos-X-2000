@@ -6,6 +6,7 @@ from typing import Iterator
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -18,8 +19,12 @@ def get_engine() -> Engine | None:
     url = _database_url()
     if not url:
         return None
-    # psycopg v3 driver is used by default when URL is postgresql://...
-    return create_engine(url, pool_pre_ping=True)
+    # Railway typically sets DATABASE_URL like: postgresql://...
+    # SQLAlchemy defaults "postgresql://" to psycopg2, but we use psycopg v3.
+    url_obj = make_url(url)
+    if url_obj.drivername in ("postgresql", "postgres"):
+        url_obj = url_obj.set(drivername="postgresql+psycopg")
+    return create_engine(url_obj, pool_pre_ping=True)
 
 
 def get_sessionmaker(engine: Engine) -> sessionmaker[Session]:
