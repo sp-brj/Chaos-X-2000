@@ -40,6 +40,19 @@ def _startup() -> None:
 def health() -> Dict[str, Any]:
     return {"ok": True}
 
+
+@app.get("/version")
+def version() -> Dict[str, Any]:
+    """
+    Helper endpoint to verify what code is deployed.
+    Railway usually provides commit sha env vars; we return whatever is available.
+    """
+    return {
+        "service": "Chaos-X-2000",
+        "railway_git_sha": os.environ.get("RAILWAY_GIT_COMMIT_SHA") or os.environ.get("RAILWAY_GIT_SHA"),
+        "railway_deployment_id": os.environ.get("RAILWAY_DEPLOYMENT_ID"),
+    }
+
 @app.get("/")
 def root() -> Dict[str, Any]:
     return {"ok": True, "service": "Chaos-X-2000"}
