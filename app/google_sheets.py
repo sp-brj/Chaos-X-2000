@@ -13,6 +13,7 @@ from app.models import Item
 
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+REQUIRED_TABS = ["Неделя", "Месяц", "Квартал", "Год", "Идея", "Мысли"]
 
 
 def _a1(tab_name: str, a1: str) -> str:
@@ -58,6 +59,25 @@ def _sheets_client() -> Any:
         raise RuntimeError("Google Sheets service account not configured (GOOGLE_SHEETS_SA_JSON_B64)")
     creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
     return build("sheets", "v4", credentials=creds, cache_discovery=False)
+
+
+def _ensure_tabs_exist(*, svc: Any, spreadsheet_id: str, tabs: list[str]) -> None:
+    """
+    Ensure the spreadsheet contains all required sheet tabs.
+    If missing, create via batchUpdate(addSheet).
+    """
+    meta = (
+        svc.spreadsheets()
+        .get(spreadsheetId=spreadsheet_id, fields="sheets(properties(title))")
+        .execute()
+    )
+    existing = {(((s.get("properties") or {}).get("title")) or "") for s in (meta.get("sheets") or [])}
+    missing = [t for t in tabs if t not in existing]
+    if not missing:
+        return
+
+    requests: list[dict[str, Any]] = [{"addSheet": {"properties": {"title": t}}} for t in missing]
+    svc.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body={"requests": requests}).execute()
 
 
 def _tab_for_item(it: Item) -> str:
@@ -129,6 +149,8 @@ def sync_items_to_google_sheet(*, items: list[Item]) -> dict[str, Any]:
 
     svc = _sheets_client()
     grouped = _rows_for_items(items)
+    # Ensure tabs exist even if spreadsheet is fresh / has different default names.
+    _ensure_tabs_exist(svc=svc, spreadsheet_id=sheet_id, tabs=REQUIRED_TABS)
 
     headers = [
         "id",
