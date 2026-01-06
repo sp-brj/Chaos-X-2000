@@ -9,7 +9,8 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from sqlalchemy import desc, select
 
 from app.db import get_engine, get_sessionmaker, session_scope
-from app.groq import summarize_and_classify, transcribe_audio
+from app.google_sheets import sync_items_to_google_sheet
+from app.groq import polish_transcript, summarize_and_classify, transcribe_audio
 from app.models import Base, Item
 from app.telegram_api import (
     answer_callback_query,
@@ -58,9 +59,25 @@ def _require_db() -> Any:
     return SessionLocal
 
 
+def _require_admin_token(x_admin_token: str | None) -> None:
+    expected = os.environ.get("ADMIN_TOKEN")
+    if not expected:
+        raise HTTPException(status_code=500, detail="ADMIN_TOKEN not configured")
+    if x_admin_token != expected:
+        raise HTTPException(status_code=401, detail="Bad admin token")
+
+
 def _horizon_from_text(text: str) -> str | None:
     t = (text or "").lower()
-    for tag in ("#неделя", "#3мес", "#полгода", "#год"):
+    # Canonical horizons: week / month / quarter / year
+    # Backward compatible aliases:
+    # - #3мес -> #квартал
+    # - #полгода -> #год (can be adjusted later)
+    if "#3мес" in t:
+        return "#квартал"
+    if "#полгода" in t:
+        return "#год"
+    for tag in ("#неделя", "#месяц", "#квартал", "#год"):
         if tag in t:
             return tag
     return None
@@ -80,6 +97,12 @@ def _format_items(items: List[Item]) -> Tuple[str, dict[str, Any]]:
         keyboard.append([{"text": f"✅ Закрыть {i}", "callback_data": f"done:{it.id}"}])
 
     return "\n".join(lines), {"inline_keyboard": keyboard}
+
+def _truncate(s: str, max_len: int) -> str:
+    s = (s or "").strip()
+    if len(s) <= max_len:
+        return s
+    return s[: max(0, max_len - 1)].rstrip() + "…"
 
 
 @app.get("/shortcuts/reminders/daily")
@@ -106,7 +129,7 @@ def shortcuts_daily(x_shortcuts_token: str | None = Header(default=None)) -> Dic
 def shortcuts_weekly(x_shortcuts_token: str | None = Header(default=None)) -> Dict[str, Any]:
     """
     Endpoint for iOS Shortcuts.
-    Returns weekly items (#3мес tasks+ideas).
+    Returns weekly items (Квартал: tasks+ideas).
     In MVP we will query Postgres; for now it's a stub.
     """
     _require_shortcuts_token(x_shortcuts_token)
@@ -114,12 +137,12 @@ def shortcuts_weekly(x_shortcuts_token: str | None = Header(default=None)) -> Di
     with session_scope(SessionLocal) as session:
         q = (
             select(Item)
-            .where(Item.status == "open", Item.horizon_tag == "#3мес", Item.kind.in_(("task", "idea")))
+            .where(Item.status == "open", Item.horizon_tag == "#квартал", Item.kind.in_(("task", "idea")))
             .order_by(desc(Item.created_at))
             .limit(200)
         )
         rows = list(session.execute(q).scalars())
-    return {"kind": "weekly", "timezone": os.environ.get("TZ", "Europe/Moscow"), "horizon": "#3мес", "items": [r.title or r.text for r in rows]}
+    return {"kind": "weekly", "timezone": os.environ.get("TZ", "Europe/Moscow"), "horizon": "#квартал", "items": [r.title or r.text for r in rows]}
 
 
 @app.post("/telegram/webhook")
@@ -184,13 +207,21 @@ async def telegram_webhook(
         return {"ok": True}
 
     if text in ("/start", "/help"):
-        await send_message(chat_id, "Х-2000: принято.\n\nПока доступно: /done (список последних 10 задач).")
+        await send_message(
+            chat_id,
+            "Х-2000: принято.\n\nПока доступно: /done (список последних 10 задач).",
+            reply_to_message_id=int(message_id) if message_id is not None else None,
+        )
         return {"ok": True}
 
     if text.startswith("/done"):
         SessionLocal = getattr(app.state, "SessionLocal", None)
         if SessionLocal is None:
-            await send_message(chat_id, "БД не настроена. Добавь DATABASE_URL в Railway и сделай redeploy.")
+            await send_message(
+                chat_id,
+                "БД не настроена. Добавь DATABASE_URL в Railway и сделай redeploy.",
+                reply_to_message_id=int(message_id) if message_id is not None else None,
+            )
             return {"ok": True}
         with session_scope(SessionLocal) as session:
             q = (
@@ -201,31 +232,51 @@ async def telegram_webhook(
             )
             items = list(session.execute(q).scalars())
         msg_text, markup = _format_items(items)
-        await send_message(chat_id, msg_text, reply_markup=markup if markup else None)
+        await send_message(
+            chat_id,
+            msg_text,
+            reply_markup=markup if markup else None,
+            reply_to_message_id=int(message_id) if message_id is not None else None,
+        )
         return {"ok": True}
 
     voice = message.get("voice")
     original_text = text
-    transcript = None
+    transcript: str | None = None
 
     if voice and voice.get("file_id"):
         file_id = voice["file_id"]
         file_path = await get_file_path(file_id)
         if file_path:
             audio_bytes = await download_file_bytes(file_path)
-            transcript = await transcribe_audio(audio_bytes, filename=file_path.split("/")[-1] or "voice.ogg")
-            original_text = transcript or ""
+            transcript = await transcribe_audio(
+                audio_bytes,
+                filename=file_path.split("/")[-1] or "voice.ogg",
+                model=os.environ.get("GROQ_TRANSCRIBE_MODEL", "whisper-large-v3"),
+            )
+            cleaned = await polish_transcript(
+                transcript or "",
+                model=os.environ.get("GROQ_TRANSCRIPT_EDIT_MODEL", os.environ.get("GROQ_SUMMARY_MODEL", "llama-3.1-8b-instant")),
+            )
+            original_text = cleaned or (transcript or "")
 
     # If still empty, ignore
     if not original_text.strip():
         return {"ok": True}
 
-    extract = await summarize_and_classify(original_text)
+    extract = await summarize_and_classify(
+        original_text,
+        model=os.environ.get("GROQ_SUMMARY_MODEL", "llama-3.1-8b-instant"),
+    )
     horizon = extract.get("horizon_tag") or _horizon_from_text(original_text)
 
     SessionLocal = getattr(app.state, "SessionLocal", None)
     if SessionLocal is None:
-        await send_message(chat_id, "БД не настроена. Добавь DATABASE_URL в Railway и сделай redeploy.")
+        await send_message(
+            chat_id,
+            "БД не настроена. Добавь DATABASE_URL в Railway и сделай redeploy.",
+            reply_to_message_id=int(message_id) if message_id is not None else None,
+        )
         return {"ok": True}
     with session_scope(SessionLocal) as session:
         it = Item(
@@ -242,13 +293,45 @@ async def telegram_webhook(
         )
         session.add(it)
 
-    # Minimal ack
-    ack_parts = ["Принято."]
+    # Ack (voice-friendly): show transcript + summary in the reply
+    ack_parts: List[str] = ["Принято."]
     if horizon:
         ack_parts.append(f"Горизонт: {horizon}")
     if extract.get("kind"):
         ack_parts.append(f"Тип: {extract['kind']}")
-    await send_message(chat_id, "\n".join(ack_parts))
+
+    if voice:
+        ack_parts.append("")
+        ack_parts.append("📝 Транскрипт (чистый):")
+        if original_text and original_text.strip():
+            ack_parts.append(_truncate(original_text, 1200))
+        else:
+            ack_parts.append("(пусто) — проверь `GROQ_API_KEY` и что Groq принял файл")
+
+        if extract.get("summary"):
+            ack_parts.append("")
+            ack_parts.append("🧠 Саммари:")
+            ack_parts.append(_truncate(extract["summary"] or "", 800))
+
+    await send_message(
+        chat_id,
+        "✅ " + "\n".join(ack_parts),
+        reply_to_message_id=int(message_id) if message_id is not None else None,
+    )
 
     # Always return 200 quickly for Telegram
     return {"ok": True}
+
+
+@app.post("/admin/google-sheets/sync")
+def admin_google_sheets_sync(x_admin_token: str | None = Header(default=None)) -> Dict[str, Any]:
+    """
+    Manual sync Postgres -> Google Sheets (snapshot).
+    Protect with ADMIN_TOKEN header to avoid exposing data.
+    """
+    _require_admin_token(x_admin_token)
+    SessionLocal = _require_db()
+    with session_scope(SessionLocal) as session:
+        q = select(Item).order_by(desc(Item.created_at)).limit(5000)
+        items = list(session.execute(q).scalars())
+    return sync_items_to_google_sheet(items=items)

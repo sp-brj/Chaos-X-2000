@@ -25,7 +25,7 @@ class Item(Base):
 
     # task | idea | note
     kind: Mapped[str] = mapped_column(String(16), index=True, default="task")
-    # one of: #неделя #3мес #полгода #год (or null)
+    # one of: #неделя #месяц #квартал #год (or null)
     horizon_tag: Mapped[str | None] = mapped_column(String(16), index=True, nullable=True)
 
     text: Mapped[str] = mapped_column(Text)  # original user text OR best-effort transcript text

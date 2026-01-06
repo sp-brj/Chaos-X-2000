@@ -17,7 +17,13 @@ def _api_base() -> str:
     return f"https://api.telegram.org/bot{token}"
 
 
-async def send_message(chat_id: int, text: str, *, reply_markup: dict[str, Any] | None = None) -> None:
+async def send_message(
+    chat_id: int,
+    text: str,
+    *,
+    reply_markup: dict[str, Any] | None = None,
+    reply_to_message_id: int | None = None,
+) -> None:
     payload: dict[str, Any] = {
         "chat_id": chat_id,
         "text": text,
@@ -25,6 +31,9 @@ async def send_message(chat_id: int, text: str, *, reply_markup: dict[str, Any] 
     }
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
+    # Best possible "mark as accepted", since bots cannot edit user messages.
+    if reply_to_message_id is not None:
+        payload["reply_to_message_id"] = reply_to_message_id
 
     async with httpx.AsyncClient(timeout=20) as client:
         r = await client.post(f"{_api_base()}/sendMessage", json=payload)
