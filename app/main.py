@@ -13,6 +13,7 @@ from app.db import get_engine, get_sessionmaker, session_scope
 from app.google_sheets import sync_items_to_google_sheet
 from app.groq import polish_transcript, summarize_and_classify, transcribe_audio
 from app.models import Base, Item
+from app.scheduler import start_scheduler
 from app.telegram_api import (
     answer_callback_query,
     download_file_bytes,
@@ -34,6 +35,24 @@ def _startup() -> None:
         return
     Base.metadata.create_all(engine)
     app.state.SessionLocal = get_sessionmaker(engine)
+    # Background scheduler (Google Sheets sync, etc.)
+    try:
+        app.state.scheduler = start_scheduler(
+            SessionLocal=app.state.SessionLocal,
+            timezone=os.environ.get("TZ", "Europe/Moscow"),
+        )
+    except Exception:
+        app.state.scheduler = None
+
+
+@app.on_event("shutdown")
+def _shutdown() -> None:
+    sched = getattr(app.state, "scheduler", None)
+    if sched is not None:
+        try:
+            sched.shutdown(wait=False)
+        except Exception:
+            pass
 
 
 @app.get("/health")

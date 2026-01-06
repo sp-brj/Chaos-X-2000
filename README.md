@@ -27,6 +27,8 @@
 - `GOOGLE_SHEETS_ID` (optional) — id таблицы “Мои цели и планы”
 - `GOOGLE_SHEETS_SA_JSON_B64` (optional, secret) — base64 JSON service account для Google Sheets API
 - `ADMIN_TOKEN` (optional, secret) — защита ручных admin-эндпоинтов (например sync в Sheets)
+- `GOOGLE_SHEETS_SYNC_ENABLED` (optional) — включить ежедневный автосинк в Sheets (default: true)
+- `GOOGLE_SHEETS_SYNC_TIME` (optional) — время автосинка в формате `HH:MM` по TZ (default: `06:00`)
 - `TZ=Europe/Moscow`
 
 ### Groq модели (MVP)
