@@ -19,9 +19,16 @@
 - `TELEGRAM_BOT_TOKEN` (secret)
 - `TELEGRAM_WEBHOOK_SECRET` (secret) — строка, которую Telegram будет присылать в заголовке `X-Telegram-Bot-Api-Secret-Token`
 - `SHORTCUTS_TOKEN` (secret) — токен для iOS Shortcuts (передаётся заголовком `X-Shortcuts-Token`)
-- `DATABASE_URL` (secret) — Railway Postgres / Supabase Postgres
-- `GROQ_API_KEY` (secret) — для транскрипта/саммари (позже в worker)
+- `DATABASE_URL` (secret) — Railway Postgres (источник истины)
+- `GROQ_API_KEY` (secret) — Groq OpenAI-compatible API key (для транскрипта и саммари)
 - `TZ=Europe/Moscow`
+
+### Groq модели (MVP)
+
+- Транскрибация: `whisper-large-v3` (голосовые из Telegram)
+- Саммари/классификация: `llama-3.1-8b-instant`
+
+Обе модели выбираются в коде по умолчанию, можно переопределить позже.
 
 ### Локальный запуск (для разработчика)
 
