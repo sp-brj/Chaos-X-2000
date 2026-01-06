@@ -15,6 +15,17 @@ from app.models import Item
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 
+def _a1(tab_name: str, a1: str) -> str:
+    """
+    Build safe A1 range for sheet tabs, including non-ASCII names.
+    Google Sheets API expects tab names with special chars/spaces/non-latin to be quoted:
+      'Неделя'!A:Z
+    Single quotes inside names must be doubled.
+    """
+    safe_tab = (tab_name or "").replace("'", "''")
+    return f"'{safe_tab}'!{a1}"
+
+
 def _sheet_id() -> str | None:
     return os.environ.get("GOOGLE_SHEETS_ID")
 
@@ -135,11 +146,11 @@ def sync_items_to_google_sheet(*, items: list[Item]) -> dict[str, Any]:
     updates = 0
     for tab, rows in grouped.items():
         # clear tab
-        svc.spreadsheets().values().clear(spreadsheetId=sheet_id, range=f"{tab}!A:Z", body={}).execute()
+        svc.spreadsheets().values().clear(spreadsheetId=sheet_id, range=_a1(tab, "A:Z"), body={}).execute()
         body = {"values": [headers] + [r.values for r in rows]}
         svc.spreadsheets().values().update(
             spreadsheetId=sheet_id,
-            range=f"{tab}!A1",
+            range=_a1(tab, "A1"),
             valueInputOption="RAW",
             body=body,
         ).execute()
